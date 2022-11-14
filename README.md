@@ -14,6 +14,6 @@ git clone https://github.com/nic-coleljy/KairosAuthentication.git
 
 # Run Frontend
 1. npm install  --legacy-peer-deps
-2. Create the ".env" file in app/frontend folder
+2. Create the ".env" file within the app/frontend folder
 3. npm start
 ```
