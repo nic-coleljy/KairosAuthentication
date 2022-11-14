@@ -1,0 +1,101 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ecr-token-refresher
+  namespace: kairos
+stringData:
+# Sensitive variables omitted, to be filled in with current session values
+  AWS_SECRET_ACCESS_KEY: ""
+  AWS_ACCESS_KEY_ID: ""
+  AWS_ACCOUNT: "731706226892"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ecr-token-refresher-cm
+  namespace: kairos
+data:
+  AWS_REGION: "ap-southeast-1"
+  DOCKER_SECRET_NAME: ecr-credentials
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ecr-token-refresher
+  namespace: kairos
+spec:
+# Refresh every 10 hours, ECR credentials expires every 12 hours
+  schedule: "* */10 * * *"
+  successfulJobsHistoryLimit: 3
+  suspend: false
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: sa-kairos
+          containers:
+          - name: ecr-token-refresher
+            image: odaniait/aws-kubectl:latest
+            imagePullPolicy: IfNotPresent
+            envFrom:
+              - secretRef:
+                  name: ecr-token-refresher
+              - configMapRef:
+                  name: ecr-token-refresher-cm
+            command:
+              - /bin/sh
+              - -c
+              - |-
+                if [ -z $AWS_SECRET_ACCESS_KEY ] || [ -z $AWS_ACCESS_KEY_ID ]
+                then
+                    echo "missing AWS credentials for ECR"
+                    exit 1
+                else
+                    ECR_TOKEN=`aws ecr get-login-password --region ${AWS_REGION}`
+                    NAMESPACE_NAME=kairos
+                    kubectl delete secret --ignore-not-found $DOCKER_SECRET_NAME -n $NAMESPACE_NAME
+                    kubectl create secret docker-registry $DOCKER_SECRET_NAME \
+                    --docker-server=https://${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com \
+                    --docker-username=AWS \
+                    --docker-password="${ECR_TOKEN}" \
+                    --namespace=$NAMESPACE_NAME
+                    echo "Secret was successfully updated at $(date)"
+                fi
+          restartPolicy: Never
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sa-kairos
+  namespace: kairos
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: role-full-access-to-secrets
+  namespace: kairos
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["ecr-credentials"]
+  verbs: ["delete"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+---
+kind: RoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: kairos-role-binding
+  namespace: kairos
+subjects:
+- kind: ServiceAccount
+  name: sa-kairos
+  namespace: kairos
+  apiGroup: ""
+roleRef:
+  kind: Role
+  name: role-full-access-to-secrets
+  apiGroup: ""
+---

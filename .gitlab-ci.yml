@@ -1,0 +1,60 @@
+stages: 
+  - infrastructure
+  - build
+  - test
+  - deploy
+
+image: ubuntu:latest
+
+variables:
+  WORKING_DIR: PLACEHOLDER_DIRECTORY
+  AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID
+  AWS_SECRET_ACCESS_KEY: $AWS_SECRET_ACCESS_KEY
+
+build-job:
+  stage: build
+
+infrastructure-init:
+  stage: infrastructure
+  image:
+    name: hashicorp/terraform:latest
+    entrypoint: ["/usr/bin/env"]
+  before_script:
+    - cd terraform
+    - terraform init
+  script:
+    - terraform apply --auto-approve
+
+depcheck-job:
+  stage: test
+  image: python:slim
+  before_script:
+    # activate virtual environment for pip to check with app packages
+    - source $WORKING_DIR/localenv/bin/activate
+  script:
+    # pip check is based on dependencies of already installed packages, not from the app itself
+    # app dependencies will be detected by pylint in linting test
+    - pip check
+
+lint-job:
+  stage: test
+  image: python:slim
+  before_script:
+    # pylint must be installed within virtual environment to integrate with app packages
+    - source $WORKING_DIR/localenv/bin/activate
+    - pip install pylint
+  script:
+    # pylint possible fail-on categories (comma separated) - C,R,W,E,F
+    # pylint fail-under evaluation score set to 0
+    - pylint --fail-on=F,E --fail-under=0 --output-format=json:lint-report.json $WORKING_DIR/*.py
+  artifacts:
+    when: always
+    paths:
+      - lint-report.json
+
+deploy-job:
+  stage: deploy
+  image: bearengineer/awscli-kubectl
+  script:
+    - aws eks update-kubeconfig --name kairos
+    - kubectl rollout restart deployment/kairos-deployment -n kairos
